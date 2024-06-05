@@ -181,7 +181,7 @@ class Plotter:
         ax.set_xlim(np.min(wlgrid)-0.05*np.min(wlgrid), np.max(wlgrid)+0.05*np.max(wlgrid))
         if np.max(wlgrid) - np.min(wlgrid) > 5:
             ax.set_xscale('log')
-        ax.set_ylim(0.0252, 0.0256)
+        ax.set_ylim(-0.00005, 0.0005)
         ax.legend(loc='best',ncol=2,framealpha=0)
 
         # If the figure is owned by this function, finalize and show/save it
@@ -220,7 +220,7 @@ class Plotter:
                         
 
                         for axis, (param, values) in zip(axes, data.items()):
-                            if mode == 'emission' and param == 'log_VO':# and 'log_TiO' not in solution_data['fit_params']:
+                            if mode == 'emission' and param == 'log_VO' and axis == axes[-2]:
                                 # Ensure log_VO is always plotted on the last axis if log_TiO is missing
                                 axis = axes[-1]
                                 sns.kdeplot(x=values, weights=weights, ax=axis, color=cmap(color_idx / len(self.filenames)), fill=True)
@@ -277,21 +277,25 @@ class Plotter:
                     for solution_index, solution_data in self.solution_iter(fd):
                         data = {param: solution_data['fit_params'][param]['trace'][...] for param in params if param in solution_data['fit_params']}
                         weights = solution_data['weights'][...]
-
+ 
+                        iparam = 0
                         for axis, (param, values) in zip(distribution_axes, data.items()):
                             if mode == 'emission' and param == 'log_VO':
                                 # Ensure log_VO is always plotted on the last axis if log_TiO is missing
                                 axis = distribution_axes[-1]
+                                iparam =-1
                                 sns.kdeplot(x=values, weights=weights, ax=axis, color=cmap(color_idx / len(self.filenames)), fill=True)
                             if mode == 'transmission' and param == 'T':
                                 # Ensure T is always plotted on the last axis if transmission mode
                                 axis = distribution_axes[-1]
+                                iparam =-1
                                 sns.kdeplot(x=values, weights=weights, ax=axis, color=cmap(color_idx / len(self.filenames)), fill=True)
                             else:
                                 sns.kdeplot(x=values, weights=weights, ax=axis, color=cmap(color_idx / len(self.filenames)), fill=True)
-                            axis.set_title(f"{param}", fontsize=13)
+                            axis.set_title(param_title[iparam], fontsize=13)
                             axis.set_ylabel("")
                             axis.set_yticks([])
+                            iparam += 1
                     color_idx += 1
                 finally:
                     fd.close()
@@ -301,6 +305,180 @@ class Plotter:
         plt.savefig(os.path.join(self.out_folder, f'{self.prefix}_{planet}_{mode}_integrated_plot.pdf'),bbox_inches='tight')
         plt.close()
 
+
+
+    def multi_spectrum_plot(self, resolution):
+        # Create a figure 
+        fig, ax = plt.subplots(int(len(self.filenames)), figsize=(7,16), dpi=300)  # Adjust the figure size as needed
+                
+        for idx, filename in enumerate(self.filenames):
+            fd = self.open_file(filename)
+            if fd is not None:
+                try:
+                    obs_spectrum = fd['Observed']['spectrum'][...]
+                    error = fd['Observed']['errorbars'][...]
+                    wlgrid = fd['Observed']['wlgrid'][...]
+                    ax[idx].errorbar(wlgrid, obs_spectrum, yerr=error, fmt='o', color='black', alpha=1, label='Observed' if idx == 0 else "_nolegend_")
+                    ax[idx].legend(bbox_to_anchor=(1.0, 1.15), loc='best',framealpha=0) if idx == 0 else "_nolegend_"
+
+                    color = 'crimson'
+                    for solution_index, solution_data in self.solution_iter(fd):
+                        if resolution is None:
+                            try:
+                                binned_grid = solution_data['Spectra']['binned_wlgrid'][...]
+                            except KeyError:
+                                binned_grid = solution_data['Spectra']['bin_wlgrid'][...]
+                            binned_spectrum = solution_data['Spectra']['binned_spectrum'][...]
+                            binned_spectrum_std = solution_data['Spectra']['binned_std'][...]
+
+                            ax[idx].plot(binned_grid, binned_spectrum, color=color)
+                            ax[idx].fill_between(binned_grid, binned_spectrum - binned_spectrum_std, binned_spectrum + binned_spectrum_std, alpha=0.2, color=color, edgecolor='none')
+                        else:
+                            grid = solution_data['Spectra']['native_wlgrid'][...]
+                            self._generic_plot(ax[idx], grid, solution_data['Spectra'], resolution, color=color)
+                               
+                finally:
+                    fd.close()
+                
+            ax[idx].set_xlim(np.min(wlgrid)-0.05*np.min(wlgrid), np.max(wlgrid)+0.05*np.max(wlgrid))
+            if np.max(wlgrid) - np.min(wlgrid) > 5:
+                ax[idx].set_xscale('log')
+            ax[idx].set_ylim(np.min(obs_spectrum-error-0.1*error), np.max(obs_spectrum+error+0.1*error))
+            ax[idx].set_title(f'{legend_tag[idx]}')
+            
+            
+        fig.supxlabel('Wavelength (μm)',fontsize=18)
+        fig.supylabel('Flux',fontsize=18)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.out_folder, f'{self.prefix}_{mode}_superimposed_spectra.pdf'))
+        plt.close()
+
+
+
+
+    def CO_Z_plot(self):
+        # Create a figure 
+        fig = plt.figure(figsize=(6,4), dpi=300)
+        ax = fig.add_subplot(1,1,1)
+        for idx, filename in enumerate(self.filenames):
+            fd = self.open_file(filename)
+            if fd is not None:
+                try:
+                    color = self.cmap(float(idx)/len(self.filenames)) 
+                    C_O_ratio = fd['Output']['Solutions']['solution0']['fit_params']['C_O_ratio']['value'][...]
+                    C_O_ratioerror = fd['Output']['Solutions']['solution0']['fit_params']['C_O_ratio']['sigma_p'][...]
+                    log_metallicity = fd['Output']['Solutions']['solution0']['fit_params']['log_metallicity']['value'][...]
+                    log_metallicityerror = fd['Output']['Solutions']['solution0']['fit_params']['log_metallicity']['sigma_p'][...]
+                    ax.errorbar(log_metallicity, C_O_ratio, xerr=log_metallicityerror, yerr=C_O_ratioerror, fmt='o', color=color, alpha=1, label=f'{legend_tag[idx]}')
+                    if idx >= len(self.filenames)-2 : #legend_tag[idx]== 'WASP-77 A b':
+                        ax.annotate(f'{legend_tag[idx]}', (log_metallicity, C_O_ratio), textcoords='offset points', xytext=(3,-6), ha='left', va='top', color=color)
+                    else:
+                        ax.annotate(f'{legend_tag[idx]}', (log_metallicity, C_O_ratio), textcoords='offset points', xytext=(3,2), ha='left', va='bottom', color=color)
+
+                finally:
+                    fd.close()
+        # ax.legend(loc='best',ncol=3,framealpha=0)                
+        plt.xlim(-2.1,3)
+        plt.ylim(0, 1.2)
+        plt.xlabel('Retrieved Metallicity (O/H) [log]',fontsize=18)
+        plt.ylabel('Retrieved C/O ratio',fontsize=18)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.out_folder, f'{self.prefix}_{mode}_CO_Z.pdf'))
+        plt.close()
+
+
+
+    def CO_ZpZstar_plot(self):
+        # Create a figure 
+        fig = plt.figure(figsize=(6,4), dpi=300)
+        ax = fig.add_subplot(1,1,1)
+        for idx, filename in enumerate(self.filenames):
+            fd = self.open_file(filename)
+            if fd is not None:
+                try:
+                    color = self.cmap(float(idx)/len(self.filenames)) 
+                    C_O_ratio = fd['Output']['Solutions']['solution0']['fit_params']['C_O_ratio']['value'][...]
+                    C_O_ratioerror = fd['Output']['Solutions']['solution0']['fit_params']['C_O_ratio']['sigma_p'][...]
+                    log_metallicity = fd['Output']['Solutions']['solution0']['fit_params']['log_metallicity']['value'][...]
+                    log_metallicityerror = fd['Output']['Solutions']['solution0']['fit_params']['log_metallicity']['sigma_p'][...]
+                    metallicityStar = fd['ModelParameters']['Star']['metallicity'][...]
+                    metallicityStar = np.log10(metallicityStar)
+                    ax.errorbar(C_O_ratio, log_metallicity/metallicityStar, yerr=log_metallicityerror, xerr=C_O_ratioerror, fmt='o', color=color, alpha=1, label=f'{legend_tag[idx]}')
+                    if idx >= len(self.filenames)-2 : #legend_tag[idx]== 'WASP-77 A b':
+                        ax.annotate(f'{legend_tag[idx]}', (C_O_ratio, log_metallicity/metallicityStar), textcoords='offset points', xytext=(3,-6), ha='left', va='top', color=color)
+                    else:
+                        ax.annotate(f'{legend_tag[idx]}', (C_O_ratio, log_metallicity/metallicityStar), textcoords='offset points', xytext=(3,2), ha='left', va='bottom', color=color)
+
+                finally:
+                    fd.close()
+        plt.xlabel('Retrieved C/O ratio',fontsize=18)
+        plt.ylabel(r'log$_{10}(Z_{planet}/Z_{star})$',fontsize=18)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.out_folder, f'{self.prefix}_{mode}_CO_ZpZstar.pdf'))
+        plt.close()
+
+
+
+
+    def LogFree_Temp_plot(self):
+        # List of free species added to FRECKLL
+        params = ['log_TiO', 'log_VO']
+        for param in params:
+            # Create a figure 
+            fig = plt.figure(figsize=(6,4), dpi=300)
+            ax = fig.add_subplot(1,1,1)
+            for idx, filename in enumerate(self.filenames):
+                fd = self.open_file(filename)
+                if fd is not None:
+                    try:
+                        color = self.cmap(float(idx)/len(self.filenames)) 
+                        LogFree = fd['Output']['Solutions']['solution0']['fit_params'][param]['value'][...]
+                        LogFreeerror = fd['Output']['Solutions']['solution0']['fit_params'][param]['sigma_p'][...]
+                        T = fd['Output']['Solutions']['solution0']['fit_params']['T_point1']['value'][...]
+                        Terror = fd['Output']['Solutions']['solution0']['fit_params']['T_point1']['sigma_p'][...]
+                        ax.errorbar(T, LogFree, xerr=Terror, yerr=LogFreeerror, fmt='o', color=color, alpha=1, label=f'{legend_tag[idx]}')
+                        if idx >= len(self.filenames)-2 : #legend_tag[idx]== 'WASP-77 A b':
+                            ax.annotate(f'{legend_tag[idx]}', (T, LogFree), textcoords='offset points', xytext=(3,-6), ha='left', va='top', color=color)
+                        else:
+                            ax.annotate(f'{legend_tag[idx]}', (T, LogFree), textcoords='offset points', xytext=(3,2), ha='left', va='bottom', color=color)
+
+                    finally:
+                        fd.close()
+            plt.xlabel('Retrieved Planet Temperature [K]',fontsize=12)
+            plt.ylabel('Log(TiO)',fontsize=12) if param == 'log_TiO' else plt.ylabel('Log(VO)',fontsize=12)
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.out_folder, f'{self.prefix}_{mode}_{param}_temperature.pdf'))
+            plt.close()
+
+
+
+    def IsoT_Rp_plot(self):
+        # Create a figure 
+        fig = plt.figure(figsize=(6,4), dpi=300)
+        ax = fig.add_subplot(1,1,1)
+        for idx, filename in enumerate(self.filenames):
+            fd = self.open_file(filename)
+            if fd is not None:
+                try:
+                    color = self.cmap(float(idx)/len(self.filenames)) 
+                    planet_radius = fd['Output']['Solutions']['solution0']['fit_params']['planet_radius']['value'][...]
+                    planet_radiuserror = fd['Output']['Solutions']['solution0']['fit_params']['planet_radius']['sigma_p'][...]
+                    T = fd['Output']['Solutions']['solution0']['fit_params']['T']['value'][...]
+                    Terror = fd['Output']['Solutions']['solution0']['fit_params']['T']['sigma_p'][...]
+                    ax.errorbar(planet_radius, T,  yerr=Terror, xerr=planet_radiuserror, fmt='o', color=color, alpha=1, label=f'{legend_tag[idx]}')
+                    if idx >= len(self.filenames)-2 : #legend_tag[idx]== 'WASP-77 A b':
+                        ax.annotate(f'{legend_tag[idx]}', (planet_radius, T), textcoords='offset points', xytext=(3,-6), ha='left', va='top', color=color)
+                    else:
+                        ax.annotate(f'{legend_tag[idx]}', (planet_radius, T), textcoords='offset points', xytext=(3,2), ha='left', va='bottom', color=color)
+
+                finally:
+                    fd.close()
+        plt.xlabel(r'Retrieved Planet Radius [R$_{J}$]',fontsize=12)
+        plt.ylabel('Retrieved Planet Temperature [K]',fontsize=12)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.out_folder, f'{self.prefix}_{mode}_IsoT_Rp.pdf'))
+        plt.close()
+
 if __name__ == "__main__":
     
     file_path = '/Users/deborah/Documents/Research/EXACT/results/exoplanets'
@@ -308,24 +486,25 @@ if __name__ == "__main__":
     # ################################# EMISSION ################################# 
     # mode = 'emission'
 
-    # params = ['T_surface', 'T_point1', 'T_point2', 'T_point3', 'T_top', 'C_O_ratio', 'log_Kzz', 'log_metallicity', 'log_TiO', 'log_VO'] 
-    # params = ['T_surface', 'T_point1', 'T_point2', 'T_point3', 'T_top', 'log_C_O_ratio', 'log_Kzz', 'log_metallicity', 'log_TiO', 'log_VO'] 
+    # params = ['T_surface', 'T_point1', 'T_point2', 'T_point3', 'T_top', 'C_O_ratio', 'log_Kzz', 'log_metallicity', 'log_TiO', 'log_VO']
+    # param_title = [r'T$_{surface}$', r'T$_{1}$',r'T$_{2}$', r'T$_{3}$', r'T$_{top}$', r'C/O', 'log(Kzz)', 'log(Z)', 'log(TiO)', 'log(VO)'] 
+    # # # # # params = ['T_surface', 'T_point1', 'T_point2', 'T_point3', 'T_top', 'log_C_O_ratio', 'log_Kzz', 'log_metallicity', 'log_TiO', 'log_VO'] 
 
-    #vlegend_tag = ['FRECKLL', 'FRECKLL, TiO','FRECKLL, VO','FRECKLL, TiO & VO']
+    # # # legend_tag = ['FRECKLL', 'FRECKLL, TiO','FRECKLL, VO','FRECKLL, TiO & VO']
     # legend_tag = ['FRECKLL', 'FRECKLL, log(Z)>0', 'FRECKLL, TiO, log(Z)>0','FRECKLL, VO, log(Z)>0','FRECKLL, TiO & VO, log(Z)>0',
     #              'FRECKLL, log(Z)<0', 'FRECKLL, TiO, log(Z)<0','FRECKLL, VO, log(Z)<0','FRECKLL, TiO & VO, log(Z)<0']
 
-    # planet = 'HAT-P-2 b'
-    # plotter = Plotter(filenames=[f"{file_path}/HATP2b/HATP2b_retrieval_pychegp.hdf5",
-    #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZpos.hdf5", 
-    #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZpos_freeTiO.hdf5",
-    #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZpos_freeVO.hdf5",
-    #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZpos_freeTiOVO.hdf5",
-    #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZneg.hdf5", 
-    #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZneg_freeTiO.hdf5",
-    #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZneg_freeVO.hdf5",
-    #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZneg_freeTiOVO.hdf5"
-    #                              ])
+    # # planet = 'HAT-P-2 b'
+    # # plotter = Plotter(filenames=[f"{file_path}/HATP2b/HATP2b_retrieval_pychegp.hdf5",
+    # #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZpos.hdf5", 
+    # #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZpos_freeTiO.hdf5",
+    # #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZpos_freeVO.hdf5",
+    # #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZpos_freeTiOVO.hdf5",
+    # #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZneg.hdf5", 
+    # #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZneg_freeTiO.hdf5",
+    # #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZneg_freeVO.hdf5",
+    # #                              f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZneg_freeTiOVO.hdf5"
+    # #                              ])
 
     # planet = 'HD-189733 b'
     # plotter = Plotter(filenames=[f"{file_path}/HD189733b/HD189733b_retrieval_pychegp.hdf5",
@@ -339,62 +518,145 @@ if __name__ == "__main__":
     #                              f"{file_path}/HD189733b/HD189733b_retrieval_pychegp_logZneg_freeTiOVO.hdf5"
     #                              ])
 
-    # planet = 'TrES-3 b'
-    # plotter = Plotter(filenames=[f"{file_path}/TrES3b/TrES3b_retrieval_pychegp_photodissociation.hdf5", 
-    #                              f"{file_path}/TrES3b/TrES3b_retrieval_pychegp_freeTiO.hdf5",
-    #                              f"{file_path}/TrES3b/TrES3b_retrieval_pychegp_freeVO.hdf5",
-    #                              f"{file_path}/TrES3b/TrES3b_retrieval_pychegp_freeTiOVO.hdf5"])
+    # # planet = 'HD-209458 b'
+    # # plotter = Plotter(filenames=[f"{file_path}/HD209458b/HD209458b_retrieval_pychegp.hdf5", 
+    # #                              f"{file_path}/HD209458b/HD209458b_retrieval_pychegp_freeTiO.hdf5",
+    # #                              f"{file_path}/HD209458b/HD209458b_retrieval_pychegp_freeVO.hdf5",
+    # #                              f"{file_path}/HD209458b/HD209458b_retrieval_pychegp_freeTiOVO.hdf5"])
     
-    # planet = 'WASP-19 b'
-    # plotter = Plotter(filenames=[f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_photodissociation.hdf5",
-    #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_photodissociation_logZpos.hdf5", 
-    #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZpos_freeTiO.hdf5",
-    #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZpos_freeVO.hdf5",
-    #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZpos_freeTiOVO.hdf5",
-    #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_photodissociation_logZneg.hdf5", 
-    #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZneg_freeTiO.hdf5",
-    #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZneg_freeVO.hdf5",
-    #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZneg_freeTiOVO.hdf5"
+    # # planet = 'Kepler-13 A b'
+    # # plotter = Plotter(filenames=[f"{file_path}/Kepler13Ab/Kepler13Ab_retrieval_pychegp.hdf5", 
+    # #                              f"{file_path}/Kepler13Ab/Kepler13Ab_retrieval_pychegp_freeTiO.hdf5",
+    # #                              f"{file_path}/Kepler13Ab/Kepler13Ab_retrieval_pychegp_freeVO.hdf5",
+    # #                              f"{file_path}/Kepler13Ab/Kepler13Ab_retrieval_pychegp_freeTiOVO.hdf5"
+    # #                              ])
+
+    # # planet = 'TrES-3 b'
+    # # plotter = Plotter(filenames=[f"{file_path}/TrES3b/TrES3b_retrieval_pychegp_photodissociation.hdf5", 
+    # #                              f"{file_path}/TrES3b/TrES3b_retrieval_pychegp_freeTiO.hdf5",
+    # #                              f"{file_path}/TrES3b/TrES3b_retrieval_pychegp_freeVO.hdf5",
+    # #                              f"{file_path}/TrES3b/TrES3b_retrieval_pychegp_freeTiOVO.hdf5"])
+    
+    # # planet = 'WASP-19 b'
+    # # plotter = Plotter(filenames=[f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_photodissociation.hdf5",
+    # #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_photodissociation_logZpos.hdf5", 
+    # #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZpos_freeTiO.hdf5",
+    # #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZpos_freeVO.hdf5",
+    # #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZpos_freeTiOVO.hdf5",
+    # #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_photodissociation_logZneg.hdf5", 
+    # #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZneg_freeTiO.hdf5",
+    # #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZneg_freeVO.hdf5",
+    # #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZneg_freeTiOVO.hdf5"
+    # #                              ])
+    
+    # # planet = 'WASP-4 b'
+    # # plotter = Plotter(filenames=[f"{file_path}/WASP4b/WASP4b_retrieval_pychegp.hdf5", 
+    # #                              f"{file_path}/WASP4b/WASP4b_retrieval_pychegp_freeTiO.hdf5",
+    # #                              f"{file_path}/WASP4b/WASP4b_retrieval_pychegp_freeVO.hdf5",
+    # #                              f"{file_path}/WASP4b/WASP4b_retrieval_pychegp_freeTiOVO.hdf5"])
+    
+    # # planet = 'WASP-43 b'
+    # # plotter = Plotter(filenames=[f"{file_path}/WASP43b/WASP43b_retrieval_pychegp.hdf5", 
+    # #                              f"{file_path}/WASP43b/WASP43b_retrieval_pychegp_freeTiO.hdf5",
+    # #                              f"{file_path}/WASP43b/WASP43b_retrieval_pychegp_freeVO.hdf5",
+    # #                              f"{file_path}/WASP43b/WASP43b_retrieval_pychegp_freeTiOVO.hdf5"
+    # #                             ])
+
+    # # planet = 'WASP-74 b'
+    # # plotter = Plotter(filenames=[f"{file_path}/WASP74b/WASP74b_retrieval_pychegp.hdf5",
+    # #                              f"{file_path}/WASP74b/WASP74b_retrieval_pychegp_logZpos.hdf5", 
+    # #                              f"{file_path}/WASP74b/WASP74b_retrieval_pychegp_logZpos_freeTiO.hdf5",
+    # #                              f"{file_path}/WASP74b/WASP74b_retrieval_pychegp_logZpos_freeVO.hdf5",
+    # #                              f"{file_path}/WASP74b/WASP74b_retrieval_pychegp_logZpos_freeTiOVO.hdf5",
+    # #                              f"{file_path}/WASP74b/WASP74b_retrieval_pychegp_logZneg.hdf5", 
+    # #                              f"{file_path}/WASP74b/WASP74b_retrieval_pychegp_logZneg_freeTiO.hdf5",
+    # #                              f"{file_path}/WASP74b/WASP74b_retrieval_pychegp_logZneg_freeVO.hdf5",
+    # #                              f"{file_path}/WASP74b/WASP74b_retrieval_pychegp_logZneg_freeTiOVO.hdf5"
+    # #                              ])
+
+
+    # # planet = 'WASP-77 A b'
+    # # plotter = Plotter(filenames=[f"{file_path}/WASP77Ab/WASP77Ab_retrieval_pychegp.hdf5", 
+    # #                              f"{file_path}/WASP77Ab/WASP77Ab_retrieval_pychegp_freeTiO_photodissociation.hdf5",
+    # #                              f"{file_path}/WASP77Ab/WASP77Ab_retrieval_pychegp_freeVO_photodissociation.hdf5",
+    # #                              f"{file_path}/WASP77Ab/WASP77Ab_retrieval_pychegp_freeTiOVO_photodissociation.hdf5"
+    # #                             ])
+    
+
+
+
+
+
+
+    # ################################# TRANSMISSION ################################# 
+    # # mode = 'transmission'
+    # # params = ['planet_radius','C_O_ratio', 'log_Kzz', 'log_metallicity', 'T_surface', 'T_point1', 'T_point2', 'T_point3','T_top','T']
+    # # param_title = [r'$R_{planet}$',r'C/O','log(Kzz)', 'log(Z)',r'T$_{surface}$', r'T$_{1}$',r'T$_{2}$', r'T$_{3}$', r'T$_{top}$', r'T$_{isothermal}$']
+
+    # # legend_tag = ['FRECKLL, 5-point temperature profile', 'FRECKLL, isothermal temperature profile']
+    
+    # # # planet = 'HD-189733 b'
+    # # # plotter = Plotter(filenames=[f"{file_path}/HD189733b/HD189733b_retrieval_transmission_pychegp.hdf5", 
+    # # #                              f"{file_path}/HD189733b/HD189733b_retrieval_transmission_pychegp_isothermal.hdf5"])
+    
+    # # planet = 'HD-209458 b'
+    # # plotter = Plotter(filenames=[f"{file_path}/HD209458b/HD209458b_retrieval_pychegp_transmission.hdf5", 
+    # #                              f"{file_path}/HD209458b/HD209458b_retrieval_pychegp_transmission_photodiss_isothermal.hdf5"])
+    
+    # # # planet = 'WASP-43 b'
+    # # # plotter = Plotter(filenames=[f"{file_path}/WASP43b/WASP43b_retrieval_transmission_pychegp.hdf5", 
+    # # #                              f"{file_path}/WASP43b/WASP43b_retrieval_transmission_pychegp_isothermal.hdf5"])  
+
+    # # # planet = 'WASP-74 b'
+    # # # plotter = Plotter(filenames=[f"{file_path}/WASP74b/WASP74b_retrieval_transmission_pychegp.hdf5", 
+    # # #                              f"{file_path}/WASP74b/WASP74b_retrieval_transmission_pychegp_isothermal_maximumTime5only.hdf5"
+    # # #                              ])    
+
+
+
+
+
+
+    # plotter.plot_temperature_profiles()
+    # plotter.plot_fitted_spectrum(resolution=10000)
+    # #plotter.plot_fitted_spectrum()
+    # plotter.plot_feature_distributions()
+    # plotter.integrated_plot()
+
+
+    ################################# POPULATION ################################# 
+    # mode = 'population_emission'
+    # # legend_tag = ['HAT-P-2 b', 'HD-189733 b', 'HD-209458 b', 'Kepler-13 A b', 'TrES-3 b', 'WASP-19 b', 'WASP-4 b', 'WASP-43 b', 'WASP-74 b', 'WASP-77 A b' ]  
+    # legend_tag = ['HAT-P-2 b', 'HD-189733 b', 'Kepler-13 A b', 'TrES-3 b', 'WASP-19 b', 'WASP-4 b', 'WASP-43 b', 'WASP-74 b', 'WASP-77 A b' ]  
+    # plotter = Plotter(filenames=[f"{file_path}/HATP2b/HATP2b_retrieval_pychegp_logZneg_freeTiOVO.hdf5",
+    #                              f"{file_path}/HD189733b/HD189733b_retrieval_pychegp_logZpos_freeTiOVO.hdf5",
+    #                             #  f"{file_path}/HD209458b/HD209458b_retrieval_pychegp.hdf5",
+    #                              f"{file_path}/Kepler13Ab/Kepler13Ab_retrieval_pychegp_freeTiOVO.hdf5",
+    #                              f"{file_path}/TrES3b/TrES3b_retrieval_pychegp_freeTiOVO.hdf5",
+    #                              f"{file_path}/WASP19b/WASP19b_retrieval_pychegp_logZneg_freeTiOVO.hdf5",
+    #                              f"{file_path}/WASP4b/WASP4b_retrieval_pychegp_freeTiOVO.hdf5",
+    #                              f"{file_path}/WASP43b/WASP43b_retrieval_pychegp_freeTiOVO.hdf5",
+    #                              f"{file_path}/WASP74b/WASP74b_retrieval_pychegp_logZpos_freeTiOVO.hdf5",
+    #                              f"{file_path}/WASP77Ab/WASP77Ab_retrieval_pychegp_freeTiOVO_photodissociation.hdf5"
     #                              ])
     
-    # planet = 'WASP-4 b'
-    # plotter = Plotter(filenames=[f"{file_path}/WASP4b/WASP4b_retrieval_pychegp.hdf5", 
-    #                              f"{file_path}/WASP4b/WASP4b_retrieval_pychegp_freeTiO.hdf5",
-    #                              f"{file_path}/WASP4b/WASP4b_retrieval_pychegp_freeVO.hdf5",
-    #                              f"{file_path}/WASP4b/WASP4b_retrieval_pychegp_freeTiOVO.hdf5"])
+    mode = 'population_transmission'
+    legend_tag = ['HD-189733 b', 'HD-209458 b','WASP-43 b', 'WASP-74 b'] 
+    plotter = Plotter(filenames=[f"{file_path}/HD189733b/HD189733b_retrieval_transmission_pychegp_isothermal.hdf5",
+                                 f"{file_path}/HD209458b/HD209458b_retrieval_pychegp_transmission_photodiss_isothermal.hdf5",
+                                 f"{file_path}/WASP43b/WASP43b_retrieval_transmission_pychegp_isothermal.hdf5",
+                                 f"{file_path}/WASP74b/WASP74b_retrieval_transmission_pychegp_isothermal_maximumTime5only.hdf5"
+                                 ])
+
+
+    plotter.multi_spectrum_plot(resolution = 10000)
+    plotter.CO_Z_plot()
     
-    # planet = 'WASP-43 b'
-    # plotter = Plotter(filenames=[f"{file_path}/WASP43b/WASP43b_retrieval_pychegp.hdf5", 
-    #                              f"{file_path}/WASP43b/WASP43b_retrieval_pychegp_freeTiO.hdf5",
-    #                              f"{file_path}/WASP43b/WASP43b_retrieval_pychegp_freeVO.hdf5",
-    #                              f"{file_path}/WASP43b/WASP43b_retrieval_pychegp_freeTiOVO.hdf5"])
+    if mode == 'population_emission':
+        plotter.LogFree_Temp_plot()
     
-    # planet = 'WASP-77 A b'
-    # plotter = Plotter(filenames=[f"{file_path}/WASP77Ab/WASP77Ab_retrieval_pychegp.hdf5", 
-    #                              f"{file_path}/WASP77Ab/WASP77Ab_retrieval_pychegp_freeTiO_photodissociation.hdf5",
-    #                              f"{file_path}/WASP77Ab/WASP77Ab_retrieval_pychegp_freeVO_photodissociation.hdf5",
-    #                              f"{file_path}/WASP77Ab/WASP77Ab_retrieval_pychegp_freeTiOVO_photodissociation.hdf5"])
+    elif mode == 'population_transmission':
+        plotter.IsoT_Rp_plot()
+        plotter.CO_ZpZstar_plot()
     
-
-
-
-
-
-
-    ################################# TRANSMISSION ################################# 
-    mode = 'transmission'
-    params = ['planet_radius','C_O_ratio', 'log_Kzz', 'log_metallicity', 'T_surface', 'T_point1', 'T_point2', 'T_point3','T_top','T']
-
-    legend_tag = ['FRECKLL, 5-point temperature profile', 'FRECKLL, isothermal temperature profile']
-    
-    planet = 'WASP-43 b'
-    plotter = Plotter(filenames=[f"{file_path}/WASP43b/WASP43b_retrieval_transmission_pychegp.hdf5", 
-                                 f"{file_path}/WASP43b/WASP43b_retrieval_transmission_pychegp_isothermal.hdf5"])
-
-
-    plotter.plot_temperature_profiles()
-    plotter.plot_fitted_spectrum(resolution=10000)
-    #plotter.plot_fitted_spectrum()
-    plotter.plot_feature_distributions()
-    plotter.integrated_plot()
     
